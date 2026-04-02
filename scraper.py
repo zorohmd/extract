@@ -11,91 +11,123 @@ headers = {
 }
 
 
+# =========================
+# 🔹 جلب sitemap الفرعية (post فقط)
+# =========================
 def get_sitemap_links(index_url):
     try:
-        res = requests.get(index_url, headers=headers, timeout=15)
+        res = requests.get(index_url, headers=headers, timeout=20)
         soup = BeautifulSoup(res.text, "xml")
 
         links = []
+
         for loc in soup.find_all("loc"):
-            url = loc.text
+            url = loc.text.strip()
 
             if "post-sitemap" in url:
                 links.append(url)
 
-        print(f"✅ Found {len(links)} post sitemaps")
+        print(f"✅ Sitemaps found: {len(links)}")
         return links
 
     except Exception as e:
-        print("❌ Error fetching sitemap index:", e)
+        print("❌ Sitemap index error:", e)
         return []
 
 
+# =========================
+# 🔹 جلب روابط المقالات
+# =========================
 def get_urls_from_sitemap(sitemap_url):
     try:
-        res = requests.get(sitemap_url, headers=headers, timeout=15)
+        res = requests.get(sitemap_url, headers=headers, timeout=20)
         soup = BeautifulSoup(res.text, "xml")
 
-        urls = [loc.text for loc in soup.find_all("loc")]
-        print(f"   ↳ {len(urls)} URLs")
-
-        return urls
+        return [loc.text.strip() for loc in soup.find_all("loc")]
 
     except Exception as e:
-        print("❌ Error in sitemap:", sitemap_url, e)
+        print("❌ Sitemap error:", sitemap_url, e)
         return []
 
 
+# =========================
+# 🔹 meta helper
+# =========================
+def get_meta(article, name):
+    tag = article.find("meta", itemprop=name)
+    return tag.get("content", "").strip() if tag else ""
+
+
+# =========================
+# 🔹 استخراج البيانات
+# =========================
 def extract_data(page_url):
     try:
-        res = requests.get(page_url, headers=headers, timeout=15)
+        res = requests.get(page_url, headers=headers, timeout=20)
         soup = BeautifulSoup(res.text, "lxml")
 
-        title = soup.title.text.strip() if soup.title else ""
+        article = soup.find("article")
+        if not article:
+            return None
 
-        desc = ""
-        tag = soup.find("meta", attrs={"name": "description"})
-        if tag:
-            desc = tag.get("content", "")
+        # slug
+        slug = article.get("id", "").replace("post-", "")
+        if not slug:
+            slug = page_url.rstrip("/").split("/")[-1]
 
-        video_url = ""
-        video = soup.find("video")
-        if video and video.get("src"):
-            video_url = video.get("src")
-        else:
-            iframe = soup.find("iframe")
-            if iframe:
-                video_url = iframe.get("src", "")
+        # ======================
+        # 🔥 Schema extraction
+        # ======================
+        title = get_meta(article, "name")
+        description = get_meta(article, "description")
 
-        thumbnail = ""
-        og = soup.find("meta", property="og:image")
-        if og:
-            thumbnail = og.get("content", "")
+        # 🔗 روابط فقط للفيديو
+        embed = get_meta(article, "contentURL")
+        thumbnail = get_meta(article, "thumbnailUrl")
+        preview = embed
 
+        duration = get_meta(article, "duration")
+        upload_date = get_meta(article, "uploadDate")
+
+        # ======================
+        # date + time
+        # ======================
         date = ""
         time_str = ""
-        date_tag = soup.find("time")
-        if date_tag and date_tag.get("datetime"):
+
+        if upload_date:
             try:
-                dt = datetime.fromisoformat(date_tag.get("datetime"))
+                dt = datetime.fromisoformat(upload_date.replace("+02:00", ""))
                 date = dt.strftime("%d-%b-%Y")
                 time_str = dt.strftime("%H:%M")
             except:
                 pass
 
+        # ======================
+        # 🔥 categories (TEXT ONLY)
+        # ======================
         categories = []
-        for c in soup.select('a[rel="category tag"]'):
+        for c in article.select(".tags a"):
             categories.append(c.text.strip())
 
+        categories_text = ",".join(categories)  # بدون روابط نهائياً
+
         return {
-            "slug": page_url.rstrip("/").split("/")[-1],
+            "slug": slug,
             "title": title,
-            "description": desc,
-            "embed": video_url,
+            "description": description,
+
+            # روابط فقط
+            "embed": embed,
+            "preview": preview,
             "thumbnail": thumbnail,
+
+            "duration": duration,
             "date": date,
             "time": time_str,
-            "categories": ",".join(categories)
+
+            # نص فقط
+            "categories": categories_text
         }
 
     except Exception as e:
@@ -103,42 +135,44 @@ def extract_data(page_url):
         return None
 
 
+# =========================
+# 🔹 main
+# =========================
 def main():
-    all_data = []
-
     print("🚀 START")
 
-    sitemaps = get_sitemap_links(SITEMAP_INDEX_URL)
+    sitemap_links = get_sitemap_links(SITEMAP_INDEX_URL)
 
-    total_urls = 0
+    all_urls = []
 
-    for sitemap in sitemaps:
+    for sitemap in sitemap_links:
         print("📦", sitemap)
         urls = get_urls_from_sitemap(sitemap)
+        all_urls.extend(urls)
 
-        for url in urls:
-            total_urls += 1
-            print(f"[{total_urls}] Scraping:", url)
+    print(f"📄 Total pages: {len(all_urls)}")
 
-            result = extract_data(url)
+    data = []
 
-            if result:
-                all_data.append(result)
+    for i, url in enumerate(all_urls):
+        print(f"[{i+1}] Scraping:", url)
 
-            # ⛔ مهم لتجنب الحظر
-            time.sleep(0.3)
+        result = extract_data(url)
 
-    print(f"📊 Total collected: {len(all_data)}")
+        if result:
+            data.append(result)
 
-    # ✅ حتى لو فاضي ينشئ الملف
-    df = pd.DataFrame(all_data)
+        time.sleep(0.2)
 
-    if df.empty:
-        print("⚠️ No data found, creating empty file")
+    # ======================
+    # 🔥 Excel output
+    # ======================
+    df = pd.DataFrame(data)
 
     df.to_excel("output.xlsx", index=False)
 
-    print("✅ Excel file created: output.xlsx")
+    print("✅ DONE -> output.xlsx")
+    print("📊 Total:", len(data))
 
 
 if __name__ == "__main__":

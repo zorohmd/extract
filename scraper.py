@@ -2,35 +2,62 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime
+import time
 
-SITEMAP_URL = "https://alarbda.com/sitemap_index.xml"
+SITEMAP_INDEX_URL = "https://alarbda.com/sitemap_index.xml"
 
 headers = {
     "User-Agent": "Mozilla/5.0"
 }
 
 
-def get_urls_from_sitemap(url):
-    res = requests.get(url, headers=headers)
-    soup = BeautifulSoup(res.text, "xml")
-    return [loc.text for loc in soup.find_all("loc")]
+def get_sitemap_links(index_url):
+    try:
+        res = requests.get(index_url, headers=headers, timeout=15)
+        soup = BeautifulSoup(res.text, "xml")
+
+        links = []
+        for loc in soup.find_all("loc"):
+            url = loc.text
+
+            if "post-sitemap" in url:
+                links.append(url)
+
+        print(f"✅ Found {len(links)} post sitemaps")
+        return links
+
+    except Exception as e:
+        print("❌ Error fetching sitemap index:", e)
+        return []
+
+
+def get_urls_from_sitemap(sitemap_url):
+    try:
+        res = requests.get(sitemap_url, headers=headers, timeout=15)
+        soup = BeautifulSoup(res.text, "xml")
+
+        urls = [loc.text for loc in soup.find_all("loc")]
+        print(f"   ↳ {len(urls)} URLs")
+
+        return urls
+
+    except Exception as e:
+        print("❌ Error in sitemap:", sitemap_url, e)
+        return []
 
 
 def extract_data(page_url):
     try:
-        res = requests.get(page_url, headers=headers, timeout=10)
+        res = requests.get(page_url, headers=headers, timeout=15)
         soup = BeautifulSoup(res.text, "lxml")
 
-        # العنوان
         title = soup.title.text.strip() if soup.title else ""
 
-        # الوصف
         desc = ""
-        desc_tag = soup.find("meta", attrs={"name": "description"})
-        if desc_tag:
-            desc = desc_tag.get("content", "")
+        tag = soup.find("meta", attrs={"name": "description"})
+        if tag:
+            desc = tag.get("content", "")
 
-        # الفيديو
         video_url = ""
         video = soup.find("video")
         if video and video.get("src"):
@@ -40,69 +67,78 @@ def extract_data(page_url):
             if iframe:
                 video_url = iframe.get("src", "")
 
-        # thumbnail
         thumbnail = ""
-        og_img = soup.find("meta", property="og:image")
-        if og_img:
-            thumbnail = og_img.get("content", "")
+        og = soup.find("meta", property="og:image")
+        if og:
+            thumbnail = og.get("content", "")
 
-        # preview (نفس الفيديو غالباً)
-        preview = video_url
-
-        # duration
-        duration = ""
-        if video and video.get("duration"):
-            duration = video.get("duration")
-
-        # التاريخ
         date = ""
-        time = ""
+        time_str = ""
         date_tag = soup.find("time")
-        if date_tag:
+        if date_tag and date_tag.get("datetime"):
             try:
                 dt = datetime.fromisoformat(date_tag.get("datetime"))
                 date = dt.strftime("%d-%b-%Y")
-                time = dt.strftime("%H:%M")
+                time_str = dt.strftime("%H:%M")
             except:
                 pass
 
-        # الكاتيجوري
         categories = []
-        cats = soup.select('a[rel="category tag"]')
-        for c in cats:
+        for c in soup.select('a[rel="category tag"]'):
             categories.append(c.text.strip())
 
         return {
-            "slug": page_url.split("/")[-2] if "/" in page_url else page_url,
+            "slug": page_url.rstrip("/").split("/")[-1],
             "title": title,
             "description": desc,
             "embed": video_url,
-            "preview": preview,
             "thumbnail": thumbnail,
-            "duration": duration,
             "date": date,
-            "time": time,
+            "time": time_str,
             "categories": ",".join(categories)
         }
 
     except Exception as e:
-        print(f"Error: {page_url} -> {e}")
+        print("❌ Page error:", page_url, e)
         return None
 
 
 def main():
-    urls = get_urls_from_sitemap(SITEMAP_URL)
+    all_data = []
 
-    data = []
-    for url in urls:
-        print("Scraping:", url)
-        result = extract_data(url)
-        if result:
-            data.append(result)
+    print("🚀 START")
 
-    df = pd.DataFrame(data)
+    sitemaps = get_sitemap_links(SITEMAP_INDEX_URL)
+
+    total_urls = 0
+
+    for sitemap in sitemaps:
+        print("📦", sitemap)
+        urls = get_urls_from_sitemap(sitemap)
+
+        for url in urls:
+            total_urls += 1
+            print(f"[{total_urls}] Scraping:", url)
+
+            result = extract_data(url)
+
+            if result:
+                all_data.append(result)
+
+            # ⛔ مهم لتجنب الحظر
+            time.sleep(0.3)
+
+    print(f"📊 Total collected: {len(all_data)}")
+
+    # ✅ حتى لو فاضي ينشئ الملف
+    df = pd.DataFrame(all_data)
+
+    if df.empty:
+        print("⚠️ No data found, creating empty file")
+
     df.to_excel("output.xlsx", index=False)
-    print("Done!")
+
+    print("✅ Excel file created: output.xlsx")
 
 
 if __name__ == "__main__":

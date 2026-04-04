@@ -1,31 +1,40 @@
-name: Sitemap Scraper
+name: Scrape Alarbda Videos
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:      # زر "Run workflow" يدوي
   schedule:
-    - cron: '0 0 * * *' # يومي (تقدر تغيره)
+    - cron: '0 3 * * *'   # كل يوم الساعة 3 فجراً (بتوقيت UTC)
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 350    # أمان قبل الـ 6 ساعات
 
     steps:
-      - name: Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install requests beautifulsoup4 pandas openpyxl
+
+      - name: Download previous output (resume)
+        uses: actions/download-artifact@v4
+        with:
+          name: scrape-output
+          path: .
+        continue-on-error: true   # أول مرة ما فيه مشكلة
 
       - name: Run scraper
         run: python scraper.py
 
-      - name: Upload Excel
+      - name: Upload output (for next run)
         uses: actions/upload-artifact@v4
         with:
-          name: videos-data
+          name: scrape-output
           path: output.xlsx
+          retention-days: 30
